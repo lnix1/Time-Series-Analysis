@@ -1,0 +1,175 @@
+---
+title: "Time Series - Lab 1"
+author: "Louis Nix II"
+date: "9/23/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+File: Time Series Lab 1
+
+Description: This lab details a difference-in-differences analysis of General Social Survey (GSS) trends data to determine if the Reagan tax cut of 1981 created a difference in attitudes accross the income spectrum towards the government's role in reducing inequality. The variables of focus will be EQWLTH (rates peoples' feelings towards government acting to reduce inequality) and REALRINC (measures income from the respondent's occupation). I have simplified the analysis by stratifying the various income levels into four brackets using 1980 single tax payer marginal tax rates. I chose to use the interval for years between 1976 to 1985 to add sufficient time before and after the tax cuts for the analysis. I chose 1985 as an end year to avoid using confounding data from the second of the Reagan tax cuts from 1986.
+
+```{r include = FALSE}
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(foreach)
+```
+
+Start by loading in the dataset.
+```{r}
+gss <- read.csv("~/Downloads/Regressions_Lab_1/trends-gss.csv")
+```
+
+Isolate the data of interest to reduce the size of the dataset. I also need the data for income response and views on government intervention to reduce inequality.
+```{r}
+tax.income <- gss %>% select("id", "year", "realrinc", "eqwlth") %>% filter(year >= "1976" 
+                              & year <= "1985")
+```
+
+Clean the new data set to remove rows with missing entries for "realrinc." 
+```{r}
+missing.realrinc <- is.na(tax.income$realrinc)
+tax.income.clean.1 <- tax.income[missing.realrinc == FALSE,]
+```
+
+Clean out the missing values in "eqwlth."
+```{r}
+missing.eqwlth <- is.na(tax.income.clean.1$eqwlth)
+tax.income.clean.final <- tax.income.clean.1[missing.eqwlth == FALSE,]
+```
+
+Rename the data set to something a little shorter.
+```{r}
+data.clean <- tax.income.clean.final
+```
+
+Code for the year the change was introduced.
+```{r}
+data.clean$post81 <- as.numeric(data.clean$year >= 1981)
+```
+
+I next stratify the income data into four categories. The base year for "realrinc" is 1986, so I use the 1985 median income of an individual reported by the Federal Reserve as a starting point (U.S. Census Bureau. “Real Median Personal Income in the United States.” FRED, Federal Reserve Bank of St. Louis, January 1, 1974. https://fred.stlouisfed.org/series/MEPAINUSA672N). I construct four reasonable income brackets around the median using the 1980 tax code as I am interested in the change of attitudes between tax payers of economic status defined before the tax cut (“Historical Income Tax Rates and Brackets, 1862-2013.” Tax Foundation, October 17, 2013. https://taxfoundation.org/us-federal-individual-income-tax-rates-history-1913-2013-nominal-and-inflation-adjusted-brackets/).
+
+This formula will be used to assign the four numeric classifications for the income brackets.
+```{r}
+stratify.income <- function (x) {
+  if(x <= 8500) {y <- 1} 
+  else if (x > 8500 & x <= 34100) {y <- 2} 
+  else if (x > 34100 & x <= 81800) {y <- 3} 
+  else {y <- 4}
+}
+```
+
+Use the foreach package to call stratify.income accross the entire column of incomes and then coerce to a numeric vector.
+```{r}
+brackets <- foreach(a = data.clean$realrinc, .combine = rbind) %do% 
+                     try(stratify.income(a))
+brackets.vector <- as.numeric(unlist(brackets))
+```
+
+Add the bracket classification to the cleaned data frame to construct the final data frame for analysis.
+```{r}
+data.clean$incbrackets <- as.factor(brackets.vector)
+```
+
+Find the average in views on taxation for each income bracket accross the selected years.
+```{r}
+avg.opinions <- aggregate(data.clean$eqwlth, list(data.clean$year, data.clean$incbrackets), 
+                          mean)
+```
+
+Rename the columns of the resulting frame.
+```{r}
+names(avg.opinions) = c("Year", "IncBracket", "EQWLTH")
+```
+
+Plot out the changes in views between income brackets accross the study years, with seperate lines for each income group. The resulting graph indicates positive opinions as lower 'y' values. A value of 1 indicates “Government ought to reduce the income differences between the rich and poor.”
+
+```{r echo = FALSE}
+qplot(Year, EQWLTH, data=avg.opinions, geom = c("point","line"), colour = IncBracket,        
+      xlab = "Year", ylab = "Preference for Government Action") +
+      geom_vline(xintercept = 1981, linetype = "dashed")
+```
+
+From the graphic, we can see that the four income brackets experienced very different trends before the treatment. In fact, it appears that those in the two lowest brackets were shifting to less favorable views on government intervention while the next highest income bracket experienced a sizable shift towards a more favorable view. The highest income bracket appears to have been more stable in its views. As a result, I cannot assume that all other factors were consistent for these groups (a violation of the parallel trends assumption for difference-in-differences analyses), and I may need to control for other covariates after the initial analysis.
+
+We can also see that the income brackets have clearly different views from one another, as we might expect from rational citizens. In other words, those with more money are less favorable to government action to reduce inequality as it would generally have a negative impact on their status. 
+
+### Hypothesis:
+Given that the Reagan tax cut of 1981 cut marginal rates the most for higher income brackets (from 70% to 50% at the top and 14% to 11% at the bottom), I hypothesize that the greater marginal reduction for higher income brackets will lead to a greater marginal shift towards more favorable views on government reduction of inequality for those in the higher brackets, as they experience a larger reduction in burden.
+
+The challenge in conducting the analysis is that the treatment was introduced in a year in which we do not have data. As a result, we do not have a simple pivot year from which to mark the change and to anlayze our differences. 
+
+The regression for the analysis must account for the year the treatment was introduced, the income bracket, and interaction terms between the treatment year and each income bracket:
+
+$$eqwlth = \beta_{0} + \beta_{1}*post81 + \beta_{2}*incbrackets + \beta_{3}*post81*incbrackets$$
+
+In this equation, the treatment groups are the four income brackets. It is important to note that there is no clear control group, but rather four groups treated at different marginal rates. Therefore, to interpret the results, one should check to see if the coefficients indicate that the group affected with the largest magnitude of the treatment also experienced the greatest marginal change.
+
+```{r}
+reg1 <- lm(eqwlth ~ post81 + incbrackets + post81*incbrackets, data = data.clean)
+summary(reg1)
+```
+
+From the regression, it is clear that that which income bracket a respondent fell in had a statistically significant impact on determining the direction and magnitude of shift in their views on government reduction of inequality. As expected, the number is more positive for higher income brackets, signalling a greater shift towards negative views from the intercept. 
+
+Moreover, the coefficients indicate that the highest income bracket had the largest favorable shift after the tax cut. However, the lowest income bracket experienced a quite negligibly small shift towards a less favorable view. Also, the second income bracket showed a larger favorable shift than the third income bracket, despite earning less. On the whole, though, a general trend seems to exist that the higher one's income bracket, the larger the shift towards favorable views, particularly among the highest earning. The trend then generally supports the idea that greater treatment led to a greater marginal change in views (i.e. the higher the income bracket, the larger the shift).
+
+Two points of concern arise in this analysis, though. First, neither the variable $post81$ nor the the interaction terms are statistically significant. In fact, the probability that they had no effect is extrodinarily high (Pr > |t| is 95% for $post81$). Second, the coefficient for the interaction term for the highest income bracket may be useless as the data does not contain information about this bracket's views in 1983. As a result, the slope may be artifically larger in magnitude and the regression may overestimate the impact of the tax changes.
+
+To improve the analysis, I attempt to control for other, potentially relevant covariates. The following code extracts the columns from the GSS data using the respondents' ids and adds them to the clean.data set isolated earlier. 
+
+```{r}
+ids <- data.clean$id
+covariates <- c("race", "sex", "age", "partyid")
+covariates.matrix <- gss[ids, covariates]
+
+data.with.cov <- cbind(data.clean, covariates.matrix)
+```
+
+Now I check to see if the new columns have introduced missing values to the matrix.
+
+```{r}
+table(is.na(data.with.cov$race))
+table(is.na(data.with.cov$sex))
+table(is.na(data.with.cov$age))
+table(is.na(data.with.cov$partyid))
+```
+
+And now it is clear that the dataset needs to be cleaned once more to eliminate the empty values in "age" and "partyid." I do that here and conclude with a table call to is.na to check that the data is clean.
+
+```{r}
+missing.age <- is.na(data.with.cov$age)
+data.with.cov.clean1 <- data.with.cov[missing.age == FALSE,]
+
+missing.partyid <- is.na(data.with.cov.clean1$partyid)
+data.final <- data.with.cov.clean1[missing.partyid == FALSE,]
+
+table(is.na(data.final))
+```
+
+Now I can rerun the regression with the covariates included. The equation prior to estimation is:
+
+$$eqwlth = \beta_{0} + \beta_{1}*post81 + \beta_{2}*incbrackets + \beta_{3}*post81*incbrackets + \beta_{4}*race + \beta_{5}*sex + \beta_{6}*age + \beta_{7}*partyid$$
+
+And now to run the new regression:
+
+```{r}
+reg2 <- lm(eqwlth ~ post81 + incbrackets + post81*incbrackets + race + sex + age + 
+             partyid, data = data.final)
+summary(reg2)
+```
+
+Of the new covariates, only $partyid$ is significant and indicates, quite interestingly, that the higher rating the respondent chose (and consequently more Republican they lean), the more they lean favorable to government reduction of inequality, though the difference is quite small. 
+
+The new regression also shows only small changes in the coefficients to the income brackets and almost no changes to the interaction terms. The levels of significance also remain unchanged. 
+
+The coefficient for $post81$ appears to have more than doubled but remains not statistically significant. The $R^2$ also grew slightly but still remains quite low (roughly 4.13%).
+
+Having controlled for the most obvious covariates, it appears that the evidence is too weak to support the conclusion that the Reagan tax cut from 1981 caused caused a greater shift in attitudes towards inequality reduction among individuals in higher income brackets than those in lower strata. However, further investigation is certainly needed as the coefficient for change among the highest bracket resulting from the tax changes is quite large compared to the other interaction terms. It is very possible that noise from covariates not yet investigated is muddling a stronger correlation.
+
+As an aside, the investigation did reveal support for a commonly held perception that higher economic classes are less amenible to government intervention to reduce inequality. In fact, the difference is so consistent and large, it indicates strong support for theories suggesting economic classes are very rational in their views on government taxation and spending relating to social welfare. One could draw the conclusion that rational acting economic classes would react in reliably predictable ways to policy prescriptions involving a lightening of their fiscal burdens. This only lends further support to the need for more research into the changes of opinions on wealth inequality among different economic strata.
+
